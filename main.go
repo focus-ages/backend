@@ -6,10 +6,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
 	prompt "example/focus-api/prompts"
+	q "example/focus-api/queue"
 
 	"github.com/gin-gonic/gin"
 	"github.com/joho/godotenv"
@@ -24,16 +26,17 @@ type ResponseBody struct {
 	Phrases []string `json:"phrases"`
 }
 
-func generatePhrases(clientOpenAi *openai.Client, goals []string) ([]string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+func generatePhrases(apiKeys []string, goals []string) ([]string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 270*time.Second)
 	defer cancel()
 
 	var wg sync.WaitGroup
 	ch := make(chan string, 100)
 	var phrases []string
 
-	for _, goal := range goals {
+	for index, goal := range goals {
 		wg.Add(1)
+		clientOpenAi := openai.NewClient(apiKeys[index])
 		go func(goal string) {
 			defer wg.Done()
 
@@ -64,6 +67,7 @@ func generatePhrases(clientOpenAi *openai.Client, goals []string) ([]string, err
 				ch <- choice.Message.Content
 			}
 		}(goal)
+
 	}
 
 	go func() {
@@ -72,7 +76,12 @@ func generatePhrases(clientOpenAi *openai.Client, goals []string) ([]string, err
 	}()
 
 	for v := range ch {
-		phrases = append(phrases, v)
+		phrasesArray := strings.Split(v, ";")
+		for i := range phrasesArray {
+			phrasesArray[i] = strings.ReplaceAll(phrasesArray[i], `"`, "")
+			phrasesArray[i] = strings.TrimSpace(phrasesArray[i])
+		}
+		phrases = append(phrases, phrasesArray...)
 	}
 
 	if len(phrases) == 0 {
@@ -82,16 +91,31 @@ func generatePhrases(clientOpenAi *openai.Client, goals []string) ([]string, err
 	return phrases, nil
 }
 
-func handleGeneratePhrases(clientOpenAi *openai.Client) gin.HandlerFunc {
+func handleGeneratePhrases(q *q.Queue) gin.HandlerFunc {
 	return func(c *gin.Context) {
+
 		var reqBody RequestBody
 		if err := c.ShouldBindJSON(&reqBody); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		// This will triple the goals
-		// goals := append(reqBody.Goals, append(reqBody.Goals, reqBody.Goals...)...)
-		phrases, err := generatePhrases(clientOpenAi, reqBody.Goals) //  Use the goals variable to triple the requests per goal
+
+		if len(reqBody.Goals) > 6 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "limit of 6 goals per request exceeded"})
+			return
+		}
+
+		goals := append(reqBody.Goals, reqBody.Goals...)
+
+		apiKeys := make([]string, 30)
+
+		for index := range goals {
+			apiKey, _ := (*q).Dequeue()
+			(*q).Enqueue(apiKey)
+			apiKeys[index] = apiKey
+		}
+
+		phrases, err := generatePhrases(apiKeys, goals)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -120,15 +144,35 @@ func main() {
 		log.Println("error loading .env file")
 	}
 
-	apiKey := os.Getenv("OPENAI_KEY")
-	clientOpenAi := openai.NewClient(apiKey)
+	keyQueue := q.Queue{
+		os.Getenv("OPENAI_KEY1"),
+		os.Getenv("OPENAI_KEY2"),
+		os.Getenv("OPENAI_KEY3"),
+		os.Getenv("OPENAI_KEY4"),
+		os.Getenv("OPENAI_KEY5"),
+		os.Getenv("OPENAI_KEY6"),
+		os.Getenv("OPENAI_KEY7"),
+		os.Getenv("OPENAI_KEY8"),
+		os.Getenv("OPENAI_KEY9"),
+		os.Getenv("OPENAI_KEY10"),
+		os.Getenv("OPENAI_KEY11"),
+		os.Getenv("OPENAI_KEY12"),
+		os.Getenv("OPENAI_KEY13"),
+		os.Getenv("OPENAI_KEY14"),
+		os.Getenv("OPENAI_KEY15"),
+		os.Getenv("OPENAI_KEY16"),
+		os.Getenv("OPENAI_KEY17"),
+		os.Getenv("OPENAI_KEY18"),
+		os.Getenv("OPENAI_KEY19"),
+		os.Getenv("OPENAI_KEY20"),
+	}
 
 	router := gin.Default()
 
 	// Middleware
 	router.Use(corsMiddleware())
 
-	router.POST("/frases", handleGeneratePhrases(clientOpenAi))
+	router.POST("/frases", handleGeneratePhrases(&keyQueue))
 
 	port := os.Getenv("PORT") // use 8080 in a non-production environment
 	router.Run(":" + port)
